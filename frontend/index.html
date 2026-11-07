@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Core Banking High Availability</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+        .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        input, button { padding: 8px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        button { background-color: #0066cc; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h2>Secure Banking Service (HA Node)</h2>
+    <div id="health" class="card">Checking node status...</div>
+
+    <div class="card">
+        <h3>New Bank Transfer</h3>
+        <input type="text" id="sender" placeholder="Sender Name">
+        <input type="text" id="receiver" placeholder="Receiver Name">
+        <input type="number" id="amount" placeholder="Amount">
+        <button onclick="submitTransfer()">Submit Transfer</button>
+    </div>
+
+    <div class="card">
+        <h3>Recent Transfers</h3>
+        <button onclick="fetchTransfers()">Refresh List</button>
+        <ul id="transfersList"></ul>
+    </div>
+
+    <script>
+        async function checkHealth() {
+            try {
+                const res = await fetch('/health');
+                const data = await res.json();
+                document.getElementById('health').innerHTML = `<strong>Server Status:</strong> ${data.status} | <strong>Active Role:</strong> ${data.node}`;
+            } catch (e) {
+                document.getElementById('health').innerHTML = '<span style="color:red">Node Offline or Degraded</span>';
+            }
+        }
+
+        async function submitTransfer() {
+            const sender = document.getElementById('sender').value;
+            const receiver = document.getElementById('receiver').value;
+            const amount = document.getElementById('amount').value;
+            await fetch('/api/transfers', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ sender, receiver, amount: parseFloat(amount) })
+            });
+            fetchTransfers();
+        }
+
+        async function fetchTransfers() {
+            const res = await fetch('/api/transfers');
+            const data = await res.json();
+            const list = document.getElementById('transfersList');
+            list.innerHTML = '';
+            data.data.forEach(t => {
+                const li = document.createElement('li');
+                li.innerText = `#${t.id}: ${t.sender} ➔ ${t.receiver} ($${t.amount})`;
+                list.appendChild(li);
+            });
+        }
+
+        checkHealth();
+        fetchTransfers();
+    </script>
+</body>
+</html>

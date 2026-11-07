@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: standby_db
+    restart: always
+    environment:
+      POSTGRES_DB: banking
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: dbstandbybanking
+    volumes:
+      - pg_standby_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: standby_redis
+    restart: always
+
+  backend:
+    image: abdueissa/banking-backend:latest
+    container_name: standby_backend
+    restart: always
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+      NODE_ROLE: STANDBY-EC2-2
+    depends_on:
+      - db
+      - redis
+
+  frontend:
+    image: abdueissa/banking-frontend:latest
+    container_name: standby_frontend
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    container_name: proxy_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  pg_standby_data:
