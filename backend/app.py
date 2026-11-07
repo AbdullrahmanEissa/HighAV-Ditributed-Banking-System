@@ -90,7 +90,7 @@ def get_transfers():
     rows = cur.fetchall()
     cur.close()
     conn.close()
-
-    result = [{"id": r[0], "sender": r[1], "receiver": r[2], "amount": float(r[3]), "date": str(r[4])} for r in rows]
-    r.setex("latest_transfers", 10, str(result))
+    
+    result = [{"id": row[0], "sender": row[1], "receiver": row[2], "amount": float(row[3]), "date": str(row[4])} for row in rows]
+    r.setex("latest_transfers", 60, str(result))
     return {"data": result, "source": "database"}
