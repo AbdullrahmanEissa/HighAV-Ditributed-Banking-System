@@ -41,6 +41,7 @@ jobs:
           host: ${{ secrets.PRIMARY_EC2_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           script: |
             cd /home/ubuntu/app
             docker compose -f docker-compose.primary.yml pull backend frontend
@@ -52,6 +53,7 @@ jobs:
           host: ${{ secrets.STANDBY_EC2_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          passphrase: ${{ secrets.EC2_SSH_PASSPHRASE }}
           script: |
             cd /home/ubuntu/app
             docker compose -f docker-compose.standby.yml pull backend frontend
