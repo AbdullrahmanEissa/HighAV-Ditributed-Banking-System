@@ -35,6 +35,9 @@ jobs:
     needs: build-and-push
     runs-on: self-hosted
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Deploy to Primary EC2
         run: |
           docker compose -f docker-compose-primary.yml pull backend frontend
