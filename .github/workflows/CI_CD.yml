@@ -48,5 +48,5 @@ jobs:
       - name: Run Docker Compose
         run: |
           docker compose -f ${{ matrix.compose_file }} pull backend frontend
-          docker compose -f ${{ matrix.compose_file }} up -d
+          docker compose -f ${{ matrix.compose_file }} up -d --remove-orphans
 
