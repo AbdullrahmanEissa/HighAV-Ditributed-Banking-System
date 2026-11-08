@@ -33,22 +33,20 @@ jobs:
 
   deploy:
     needs: build-and-push
-    runs-on: self-hosted
+    runs-on: ${{ matrix.node_label }} 
+    strategy:
+      matrix:
+        include:
+          - node_label: primary
+            compose_file: docker-compose-primary.yml
+          - node_label: standby
+            compose_file: docker-compose-standby.yml
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Deploy to Primary EC2
+      - name: Run Docker Compose
         run: |
-          docker compose -f docker-compose-primary.yml pull backend frontend
-          docker compose -f docker-compose-primary.yml up -d
+          docker compose -f ${{ matrix.compose_file }} pull backend frontend
+          docker compose -f ${{ matrix.compose_file }} up -d
 
-      - name: Deploy to Standby EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.STANDBY_EC2_IP }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY_STANDBY }}
-          script: |
-            docker compose -f docker-compose-standby.yml pull backend frontend
-            docker compose -f docker-compose-standby.yml up -d
