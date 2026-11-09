@@ -2,6 +2,9 @@
 set -e
 
 mkdir -p /var/lib/postgresql/data/pgdata /run/postgresql
+if [ ! -f /var/lib/postgresql/data/pgdata/PG_VERSION ]; then
+    rm -rf /var/lib/postgresql/data/pgdata/*
+fi
 chown -R postgres:postgres /var/lib/postgresql /run/postgresql
 chmod 700 /var/lib/postgresql/data/pgdata
 
@@ -13,8 +16,9 @@ restapi:
   listen: 0.0.0.0:8008
   connect_address: ${PATRONI_IP}:8008
 
-etcd3:
-  hosts: ${ETCD_HOSTS:-172.31.38.111:2379}
+etcd:
+  hosts:
+    - ${ETCD_HOSTS:-172.31.38.111:2379}
 
 bootstrap:
   dcs:

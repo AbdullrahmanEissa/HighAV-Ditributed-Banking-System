@@ -55,4 +55,10 @@ jobs:
       - name: Run Docker Compose
         run: |
           docker compose -f ${{ matrix.compose_file }} pull
-          docker compose -f ${{ matrix.compose_file }} up -d --remove-orphans
+          if ! docker compose -f ${{ matrix.compose_file }} up -d --remove-orphans; then
+            echo "=== DB LOGS ==="
+            docker logs primary_db || docker logs standby_db || true
+            echo "=== ETCD LOGS ==="
+            docker logs primary_etcd || true
+            exit 1
+          fi
