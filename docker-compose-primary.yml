@@ -6,14 +6,16 @@ services:
     ports:
       - "2379:2379"
       - "2380:2380"
+    volumes:
+      - etcd_primary_data:/etcd-data
     environment:
       ETCD_NAME: "etcd-primary"
       ETCD_DATA_DIR: "/etcd-data"
-      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0"
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
       ETCD_ADVERTISE_CLIENT_URLS: "http://172.31.38.111:2379"
-      ETCD_LISTEN_PEER_URLS: "http://0.0.0"
+      ETCD_LISTEN_PEER_URLS: "http://0.0.0.0:2380"
       ETCD_INITIAL_ADVERTISE_PEER_URLS: "http://172.31.38.111:2380"
-      ETCD_INITIAL_CLUSTER: "etcd-primary=http://172.31.38.111:2380"
+      ETCD_INITIAL_CLUSTER: "etcd-primary=http://172.31.38.111:2380,etcd-standby=http://172.31.38.189:2380,etcd-witness=http://172.31.38.200:2380"
       ETCD_INITIAL_CLUSTER_STATE: "new"
       ETCD_INITIAL_CLUSTER_TOKEN: "banking-ha-cluster"
 
@@ -33,7 +35,7 @@ services:
       PATRONI_SCOPE: banking-cluster
       PATRONI_NAME: patroni-primary
       PATRONI_IP: 172.31.38.111
-      ETCD_HOSTS: etcd:2379
+      ETCD_HOSTS: "172.31.38.111:2379,172.31.38.189:2379,172.31.38.200:2379"
       DB_PASS: dbprimarybanking
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -76,4 +78,5 @@ services:
       - backend
 
 volumes:
+  etcd_primary_data:
   pg_primary_patroni_data:

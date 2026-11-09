@@ -50,14 +50,18 @@ class TransferRequest(BaseModel):
 
 @app.get("/health")
 def health_check():
-    # فحص صحي يُستخدم بواسطة Cloudflare لمراقبة السيرفر
     try:
         conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT pg_is_in_recovery();")
+        replica = cur.fetchone()[0]
         conn.close()
         r.ping()
-        return {"status": "healthy", "node": os.getenv("NODE_ROLE", "unknown")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    if replica:
+        raise HTTPException(status_code=503, detail="replica")
+    return {"status": "healthy", "node": os.getenv("NODE_ROLE", "unknown")}
 
 @app.post("/api/transfers")
 def create_transfer(payload: TransferRequest):
