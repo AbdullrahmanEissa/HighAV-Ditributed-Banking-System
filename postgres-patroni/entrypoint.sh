@@ -16,7 +16,7 @@ restapi:
   listen: 0.0.0.0:8008
   connect_address: ${PATRONI_IP}:8008
 
-etcd:
+etcd3:
   hosts:
     - ${ETCD_HOSTS:-172.31.38.111:2379}
 
