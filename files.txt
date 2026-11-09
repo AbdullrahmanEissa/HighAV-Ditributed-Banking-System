@@ -1,647 +1,0 @@
-==> ./nginx/default.conf <==
-server {
-    listen 80;
-    server_name localhost;
-
-    location / {
-        root /usr/share/nginx/html;
-        index index.html index.htm;
-        try_files $uri $uri/ /index.html;
-    }
-
-    location /api/ {
-        proxy_pass http://backend:8000/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    location /health {
-        proxy_pass http://backend:8000/health;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-
-==> ./README.md <==
-# Banking Service High Availability Architecture
-
-This document provides a technical overview of the production setup for the distributed banking core service. The design focuses on zero downtime, continuous failover, and data consistency across independent cloud compute instances.
-
----
-
-## Production Arch Overview
-
-The production infrastructure is built on an Active-Passive (Primary-Standby) deployment pattern running across two separate Amazon EC2 compute instances.
-
-### 1. Global Traffic Management & Failover Layer
-
-* **Cloudflare Global Load Balancer:** Sits at the edge in front of both servers. It receives all user traffic and routes it to the active node using Anycast routing.
-* **Continuous Health Monitoring:** Cloudflare sends automated HTTP health requests to the `/health` endpoint every few seconds.
-* **Automatic Failover:** If the Primary EC2 instance stops responding or becomes degraded, traffic instantly shifts to the Standby EC2 instance without dropping user sessions.
-
-### 2. Primary Node (EC2-1 - Active / Read-Write)
-
-* **Reverse Proxy:** An Nginx container receives public traffic on port 80/443, handles request forwarding, and enforces rate limits.
-* **Application Services:**
-* A stateless web user interface container served through Nginx.
-* A FastAPI backend handling banking transfer logic and API routes.
-
-
-* **Fast In-Memory Cache:** A Redis master instance storing active sessions, tokens, and temporary read caches to reduce direct database load.
-* **Relational Database:** A PostgreSQL 16 Primary instance that processes all insert and update write operations.
-
-### 3. Standby Node (EC2-2 - Passive / Read-Only Replica)
-
-* **Identical Application Stack:** Houses identical Docker containers for Nginx, the frontend application, and the backend service.
-* **Cache Node:** Redis running in replica mode, ready to take over cache state.
-* **Database Replication:** PostgreSQL running in hot-standby mode. It continuously receives database changes from the primary node through PostgreSQL streaming replication via a secure private channel.
-
-### 4. CI/CD Deployment Flow
-
-* Changes pushed to the production branch trigger an automated GitHub Actions pipeline.
-* Containers are built, verified, and uploaded to the centralized Docker Hub image registry (`abdueissa/banking-backend` and `abdueissa/banking-frontend`).
-* Secure remote deployment updates both the primary and standby environments concurrently with zero service interruption.
-
----
-
-## Verification & Operational Evidence
-
-### System User Interface & Node Status
-
-This Photo Shows the banking application running on the active node. The interface confirms the health status of the node, displays recent transactions, and provides the transfer execution form.
-
-
-
----
-
-### Clean Deployment State
-
-This Photo Shows the repository structure and the clean Git commit state after setting up all deployment orchestration files and service definitions.
-
-
-
----
-
-### End-to-End API Routing & Database Operations
-
-This Photo Shows the local reverse proxy routing traffic correctly. The health endpoint returns an active status, the transfer endpoint accepts write payloads into PostgreSQL, and read queries return committed records directly from the database.
-
-
-
----
-
-### High-Speed Cache Hits (Redis Integration)
-
-This Photo Shows repeat queries served directly from Redis memory cache (`"source": "redis_cache"`), preventing repeated read hits on the database engine during high-traffic windows.
-
-==> ./push-test <==
-
-==> ./postgres-patroni/entrypoint.sh <==
-#!/bin/sh
-set -e
-
-mkdir -p /var/lib/postgresql/data/pgdata /run/postgresql
-if [ ! -f /var/lib/postgresql/data/pgdata/PG_VERSION ]; then
-    rm -rf /var/lib/postgresql/data/pgdata/*
-fi
-chown -R postgres:postgres /var/lib/postgresql /run/postgresql
-chmod 700 /var/lib/postgresql/data/pgdata
-
-cat << YAML > /tmp/patroni.yml
-scope: ${PATRONI_SCOPE:-banking-cluster}
-name: ${PATRONI_NAME}
-
-restapi:
-  listen: 0.0.0.0:8008
-  connect_address: ${PATRONI_IP}:8008
-
-etcd3:
-  hosts:
-    - ${ETCD_HOSTS:-172.31.38.111:2379}
-
-bootstrap:
-  dcs:
-    ttl: 30
-    loop_wait: 10
-    retry_timeout: 10
-    maximum_lag_on_failover: 1048576
-    postgresql:
-      use_pg_rewind: true
-      use_slots: true
-      parameters:
-        wal_level: replica
-        hot_standby: "on"
-        max_wal_senders: 10
-        max_replication_slots: 10
-        wal_keep_size: 512MB
-  initdb:
-    - encoding: UTF8
-    - data-checksums
-  pg_hba:
-    - local all all trust
-    - host replication replicator 0.0.0.0/0 md5
-    - host all all 0.0.0.0/0 md5
-  post_bootstrap: /tmp/post_init.sh
-
-postgresql:
-  listen: 0.0.0.0:5432
-  connect_address: ${PATRONI_IP}:5432
-  data_dir: /var/lib/postgresql/data/pgdata
-  pgpass: /tmp/pgpass
-  authentication:
-    superuser:
-      username: postgres
-      password: ${DB_PASS:-dbprimarybanking}
-    replication:
-      username: replicator
-      password: ${DB_PASS:-dbprimarybanking}
-YAML
-
-cat << 'INIT' > /tmp/post_init.sh
-#!/bin/sh
-psql -U postgres -c "CREATE DATABASE banking;" || true
-INIT
-
-chmod +x /tmp/post_init.sh
-chown postgres:postgres /tmp/patroni.yml /tmp/post_init.sh
-
-exec su-exec postgres patroni /tmp/patroni.yml
-
-==> ./postgres-patroni/Dockerfile <==
-FROM postgres:16-alpine
-
-RUN apk add --no-cache python3 py3-pip py3-psycopg2 curl su-exec gcc python3-dev musl-dev linux-headers && \
-    pip3 install --no-cache-dir --break-system-packages patroni[etcd,etcd3] urllib3 && \
-    apk del gcc python3-dev musl-dev linux-headers && \
-    mkdir -p /var/lib/postgresql/data/pgdata /run/postgresql && \
-    chown -R postgres:postgres /var/lib/postgresql /run/postgresql
-
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
-
-==> ./docker-compose-standby.yml <==
-services:
-  db:
-    image: abdueissa/banking-postgres-patroni:latest
-    container_name: standby_db
-    hostname: patroni-standby
-    restart: always
-    ports:
-      - "5432:5432"
-      - "8008:8008"
-    volumes:
-      - pg_standby_patroni_data:/var/lib/postgresql/data
-    environment:
-      PATRONI_SCOPE: banking-cluster
-      PATRONI_NAME: patroni-standby
-      PATRONI_IP: 172.31.38.189
-      ETCD_HOSTS: 172.31.38.111:2379
-      DB_PASS: dbprimarybanking
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
-  redis:
-    image: redis:7-alpine
-    container_name: standby_redis
-    restart: always
-
-  backend:
-    image: abdueissa/banking-backend:latest
-    container_name: standby_backend
-    restart: always
-    environment:
-      DB_HOST: db
-      DB_NAME: banking
-      DB_USER: postgres
-      DB_PASS: dbprimarybanking
-      REDIS_HOST: redis
-      NODE_ROLE: STANDBY-EC2-2
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-  frontend:
-    image: abdueissa/banking-frontend:latest
-    container_name: standby_frontend
-    restart: always
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - backend
-
-volumes:
-  pg_standby_patroni_data:
-
-==> ./LICENSE <==
-Copyright (c) 2026
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-==> ./frontend/index.html <==
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Core Banking High Availability</title>
-    <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
-        .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-        input, button { padding: 8px; margin: 5px 0; width: 100%; box-sizing: border-box; }
-        button { background-color: #0066cc; color: white; border: none; cursor: pointer; }
-    </style>
-</head>
-<body>
-    <h2>Secure Banking Service (HA Node)</h2>
-    <div id="health" class="card">Checking node status...</div>
-
-    <div class="card">
-        <h3>New Bank Transfer</h3>
-        <input type="text" id="sender" placeholder="Sender Name">
-        <input type="text" id="receiver" placeholder="Receiver Name">
-        <input type="number" id="amount" placeholder="Amount">
-        <button onclick="submitTransfer()">Submit Transfer</button>
-    </div>
-
-    <div class="card">
-        <h3>Recent Transfers</h3>
-        <button onclick="fetchTransfers()">Refresh List</button>
-        <ul id="transfersList"></ul>
-    </div>
-
-    <script>
-        async function checkHealth() {
-            try {
-                const res = await fetch('/health');
-                const data = await res.json();
-                document.getElementById('health').innerHTML = `<strong>Server Status:</strong> ${data.status} | <strong>Active Role:</strong> ${data.node}`;
-            } catch (e) {
-                document.getElementById('health').innerHTML = '<span style="color:red">Node Offline or Degraded</span>';
-            }
-        }
-
-        async function submitTransfer() {
-            const sender = document.getElementById('sender').value;
-            const receiver = document.getElementById('receiver').value;
-            const amount = document.getElementById('amount').value;
-            await fetch('/api/transfers', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ sender, receiver, amount: parseFloat(amount) })
-            });
-            fetchTransfers();
-        }
-
-        async function fetchTransfers() {
-            const res = await fetch('/api/transfers');
-            const data = await res.json();
-            const list = document.getElementById('transfersList');
-            list.innerHTML = '';
-            data.data.forEach(t => {
-                const li = document.createElement('li');
-                li.innerText = `#${t.id}: ${t.sender} â” ${t.receiver} ($${t.amount})`;
-                list.appendChild(li);
-            });
-        }
-
-        checkHealth();
-        fetchTransfers();
-    </script>
-</body>
-</html>
-
-==> ./frontend/Dockerfile <==
-FROM nginx:alpine
-COPY index.html /usr/share/nginx/html/index.html
-EXPOSE 80
-
-==> ./docker-compose-primary.yml <==
-services:
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.15
-    container_name: primary_etcd
-    restart: always
-    ports:
-      - "2379:2379"
-      - "2380:2380"
-    environment:
-      ETCD_NAME: "etcd-primary"
-      ETCD_DATA_DIR: "/etcd-data"
-      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0"
-      ETCD_ADVERTISE_CLIENT_URLS: "http://172.31.38.111:2379"
-      ETCD_LISTEN_PEER_URLS: "http://0.0.0"
-      ETCD_INITIAL_ADVERTISE_PEER_URLS: "http://172.31.38.111:2380"
-      ETCD_INITIAL_CLUSTER: "etcd-primary=http://172.31.38.111:2380"
-      ETCD_INITIAL_CLUSTER_STATE: "new"
-      ETCD_INITIAL_CLUSTER_TOKEN: "banking-ha-cluster"
-
-  db:
-    image: abdueissa/banking-postgres-patroni:latest
-    container_name: primary_db
-    hostname: patroni-primary
-    restart: always
-    depends_on:
-      - etcd
-    ports:
-      - "5432:5432"
-      - "8008:8008"
-    volumes:
-      - pg_primary_patroni_data:/var/lib/postgresql/data
-    environment:
-      PATRONI_SCOPE: banking-cluster
-      PATRONI_NAME: patroni-primary
-      PATRONI_IP: 172.31.38.111
-      ETCD_HOSTS: etcd:2379
-      DB_PASS: dbprimarybanking
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
-  redis:
-    image: redis:7-alpine
-    container_name: primary_redis
-    restart: always
-
-  backend:
-    image: abdueissa/banking-backend:latest
-    container_name: primary_backend
-    restart: always
-    environment:
-      DB_HOST: db
-      DB_NAME: banking
-      DB_USER: postgres
-      DB_PASS: dbprimarybanking
-      REDIS_HOST: redis
-      NODE_ROLE: PRIMARY-EC2-1
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-  frontend:
-    image: abdueissa/banking-frontend:latest
-    container_name: primary_frontend
-    restart: always
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - backend
-
-volumes:
-  pg_primary_patroni_data:
-
-==> ./docker-compose-dev.yml <==
-services:
-  db:
-    image: postgres:16-alpine
-    container_name: dev_banking_db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: banking
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: dbdevbanking
-    ports:
-      - "5432:5432"
-    volumes:
-      - dev_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d banking"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: dev_banking_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: dev_banking_backend
-    restart: unless-stopped
-    environment:
-      DB_HOST: db
-      DB_NAME: banking
-      DB_USER: postgres
-      DB_PASS: dbdevbanking
-      REDIS_HOST: redis
-      NODE_ROLE: LOCAL-DEV
-    volumes:
-      - ./backend:/app
-    ports:
-      - "8000:8000"
-    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: dev_banking_frontend
-    restart: unless-stopped
-    volumes:
-      - ./frontend/index.html:/usr/share/nginx/html/index.html:ro
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-
-volumes:
-  dev_pgdata:
-
-==> ./backend/Dockerfile <==
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py .
-EXPOSE 8000
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-
-==> ./backend/app.py <==
-import os
-import psycopg2
-import redis
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-
-app = FastAPI()
-
-DB_HOST = os.getenv("DB_HOST", "db")
-DB_NAME = os.getenv("DB_NAME", "banking")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASS = os.getenv("DB_PASS", "secure_password")
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-
-r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
-
-def get_db_connection():
-    return psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS
-    )
-
-# ØªÙ‡ÙŠØ¦Ø© Ø¬Ø¯ÙˆÙ„ Ø§Ù„Ø¹Ù…Ù„ÙŠØ§Øª Ø¹Ù†Ø¯ Ø§Ù„Ø¥Ù‚Ù„Ø§Ø¹
-@app.on_event("startup")
-def init_db():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS transfers (
-                id SERIAL PRIMARY KEY,
-                sender VARCHAR(50),
-                receiver VARCHAR(50),
-                amount NUMERIC,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"DB Init Warning (Normal if Read-Only Standby): {e}")
-
-class TransferRequest(BaseModel):
-    sender: str
-    receiver: str
-    amount: float
-
-@app.get("/health")
-def health_check():
-    # ÙØ­Øµ ØµØ­ÙŠ ÙŠÙØ³ØªØ®Ø¯Ù… Ø¨ÙˆØ§Ø³Ø·Ø© Cloudflare Ù„Ù…Ø±Ø§Ù‚Ø¨Ø© Ø§Ù„Ø³ÙŠØ±ÙØ±
-    try:
-        conn = get_db_connection()
-        conn.close()
-        r.ping()
-        return {"status": "healthy", "node": os.getenv("NODE_ROLE", "unknown")}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/transfers")
-def create_transfer(payload: TransferRequest):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO transfers (sender, receiver, amount) VALUES (%s, %s, %s) RETURNING id;",
-            (payload.sender, payload.receiver, payload.amount)
-        )
-        transfer_id = cur.fetchone()[0]
-        conn.commit()
-        cur.close()
-        conn.close()
-        # ÙƒØ³Ø± Ø£Ùˆ ØªØ­Ø¯ÙŠØ« Ø§Ù„ÙƒØ§Ø´
-        r.delete("latest_transfers")
-        return {"success": True, "transfer_id": transfer_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database write failed: {str(e)}")
-
-@app.get("/api/transfers")
-def get_transfers():
-    cached = r.get("latest_transfers")
-    if cached:
-        return {"data": eval(cached), "source": "redis_cache"}
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, sender, receiver, amount, created_at FROM transfers ORDER BY id DESC LIMIT 5;")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    
-    result = [{"id": row[0], "sender": row[1], "receiver": row[2], "amount": float(row[3]), "date": str(row[4])} for row in rows]
-    r.setex("latest_transfers", 60, str(result))
-    return {"data": result, "source": "database"}
-
-==> ./backend/__pycache__/app.cpython-311.pyc <==
-§
-    v˜ïj¾  ã                   ó6  — d dl Z d dlZd dlZd dlmZmZ d dlmZ  e¦   «         Z e j	        dd¦  «        Z
- e j	        dd¦  «        Z e j	        dd	¦  «        Z e j	        d
-d¦  «        Z e j	        dd¦  «        Z ej        edd¬¦  «        Zd„ Ze                     d¦  «        d„ ¦   «         Z G d„ de¦  «        Ze                     d¦  «        d„ ¦   «         Ze                     d¦  «        defd„¦   «         Ze                     d¦  «        d„ ¦   «         ZdS )é    N)ÚFastAPIÚHTTPException)Ú	BaseModelÚDB_HOSTÚdbÚDB_NAMEÚbankingÚDB_USERÚpostgresÚDB_PASSÚsecure_passwordÚ
-REDIS_HOSTÚredisië  T)ÚhostÚportÚdecode_responsesc                  óZ   — t          j        t          t          t          t
-          ¬¦  «        S )N)r   ÚdatabaseÚuserÚpassword)Úpsycopg2Úconnectr   r   r
-   r   © ó    ú/app/app.pyÚget_db_connectionr      s(   € İÔİİİİğ	ñ ô ğ r   Ústartupc                  óB  — 	 t          ¦   «         } |                      ¦   «         }|                     d¦  «         |                      ¦   «          |                     ¦   «          |                      ¦   «          d S # t
-          $ r}t          d|› ¦  «         Y d }~d S d }~ww xY w)Na  
-            CREATE TABLE IF NOT EXISTS transfers (
-                id SERIAL PRIMARY KEY,
-                sender VARCHAR(50),
-                receiver VARCHAR(50),
-                amount NUMERIC,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        z/DB Init Warning (Normal if Read-Only Standby): )r   ÚcursorÚexecuteÚcommitÚcloseÚ	ExceptionÚprint)ÚconnÚcurÚes      r   Úinit_dbr(      s´   € ğEİ Ñ"Ô"ˆØkŠk‰mŒmˆØŠğ ñ 	ô 	ğ 	ğ 	Š‰ŒˆØ	Š	‰ŒˆØ
-Š
-‰Œˆˆˆøİğ Eğ Eğ EİĞCÀĞCĞCÑDÔDĞDĞDĞDĞDĞDĞDĞDøøøøğEøøøs   ‚A3A7 Á7
-BÂBÂBc                   ó.   — e Zd ZU eed<   eed<   eed<   dS )ÚTransferRequestÚsenderÚreceiverÚamountN)Ú__name__Ú
-__module__Ú__qualname__ÚstrÚ__annotations__Úfloatr   r   r   r*   r*   .   s+   € € € € € € Ø€K€KKØ€M€MMØ€M€MM€M€Mr   r*   z/healthc                  ó
-  — 	 t          ¦   «         } |                      ¦   «          t                               ¦   «          dt	          j        dd¦  «        dœS # t          $ r#}t          dt          |¦  «        ¬¦  «        ‚d }~ww xY w)NÚhealthyÚ	NODE_ROLEÚunknown)ÚstatusÚnodeéô  ©Ústatus_codeÚdetail)	r   r"   ÚrÚpingÚosÚgetenvr#   r   r1   )r%   r'   s     r   Úhealth_checkrB   3   s~   € ğ<İ Ñ"Ô"ˆØ
-Š
-‰Œˆİ	Š‰ŒˆØ#­R¬Y°{ÀIÑ-NÔ-NĞOĞOĞOøİğ <ğ <ğ <İ¨µC¸±F´FĞ;Ñ;Ô;Ğ;øøøøğ<øøøs   ‚AA Á
-BÁA=Á=Bz/api/transfersÚpayloadc                 óè  — 	 t          ¦   «         }|                     ¦   «         }|                     d| j        | j        | j        f¦  «         |                     ¦   «         d         }|                     ¦   «          |                     ¦   «          |                     ¦   «          t           
-                    d¦  «         d|dœS # t          $ r&}t          ddt          |¦  «        › ¬¦  «        ‚d }~ww xY w)	NzRINSERT INTO transfers (sender, receiver, amount) VALUES (%s, %s, %s) RETURNING id;r   Úlatest_transfersT)ÚsuccessÚtransfer_idr:   zDatabase write failed: r;   )r   r   r    r+   r,   r-   Úfetchoner!   r"   r>   Údeleter#   r   r1   )rC   r%   r&   rG   r'   s        r   Úcreate_transferrJ   >   sì   € ğXİ Ñ"Ô"ˆØkŠk‰mŒmˆØŠØ`ØŒ^˜WÔ-¨w¬~Ğ>ñ	
-ô 	
-ğ 	
-ğ —l’l‘n”n QÔ'ˆØŠ‰ŒˆØ	Š	‰ŒˆØ
-Š
-‰Œˆå	ŠĞ#Ñ$Ô$Ğ$Ø°Ğ<Ğ<Ğ<øİğ Xğ Xğ Xİ¨Ğ4VÍcĞRSÉfÌfĞ4VĞ4VĞWÑWÔWĞWøøøøğXøøøs   ‚B>C Ã
-C1Ã!C,Ã,C1c                  ó¸  — t                                d¦  «        } | rt          | ¦  «        ddœS t          ¦   «         }|                     ¦   «         }|                     d¦  «         |                     ¦   «         }|                     ¦   «          |                     ¦   «          d„ |D ¦   «         }t                                ddt          |¦  «        ¦  «         |ddœS )NrE   Úredis_cache)ÚdataÚsourcezXSELECT id, sender, receiver, amount, created_at FROM transfers ORDER BY id DESC LIMIT 5;c           
-      ó   — g | ]B}|d          |d         |d         t          |d         ¦  «        t          |d         ¦  «        dœ‘ŒCS )r   é   é   é   é   )Úidr+   r,   r-   Údate)r3   r1   )Ú.0Úrows     r   ú
-<listcomp>z!get_transfers.<locals>.<listcomp>^   sb   € ğ  Bğ  Bğ  BĞuxS˜”V s¨1¤v¸3¸q¼6ÍUĞSVĞWXÔSYÉ]Ì]ÕdgĞhkĞlmÔhnÑdoÔdoĞpĞpğ  Bğ  Bğ  Br   é<   r   )
-r>   ÚgetÚevalr   r   r    Úfetchallr"   Úsetexr1   )Úcachedr%   r&   ÚrowsÚresults        r   Úget_transfersra   Q   sÔ   € åUŠUĞ%Ñ&Ô&€FØğ ?İ˜V™œ°Ğ>Ğ>Ğ>åÑÔ€DØ
-+Š+‰-Œ-€CØ‡K‚KĞjÑkÔkĞkØ<Š<‰>Œ>€DØ‡I‚IK„K€KØ‡J‚JL„L€Lğ Bğ  Bğ  }Ağ  Bñ  Bô  B€Fİ‡G‚GĞ ¥C¨¡K¤KÑ0Ô0Ğ0Ø jĞ1Ğ1Ğ1r   )r@   r   r   Úfastapir   r   Úpydanticr   ÚapprA   r   r   r
-   r   r   ÚRedisr>   r   Úon_eventr(   r*   rZ   rB   ÚpostrJ   ra   r   r   r   ú<module>rh      sÆ  ğØ 	€	€	€	Ø €€€Ø €€€Ø *Ğ *Ğ *Ğ *Ğ *Ğ *Ğ *Ğ *Ø Ğ Ğ Ğ Ğ Ğ à€gi„i€à
-ˆ"Œ)I˜tÑ
-$Ô
-$€Ø
-ˆ"Œ)I˜yÑ
-)Ô
-)€Ø
-ˆ"Œ)I˜zÑ
-*Ô
-*€Ø
-ˆ"Œ)IĞ0Ñ
-1Ô
-1€ØˆRŒY| WÑ-Ô-€
-à€E„KZ d¸TĞBÑBÔB€ğğ ğ ğ ‡‚ˆiÑÔğEğ Eñ ÔğEğ&ğ ğ ğ ğ iñ ô ğ ğ
- ‡‚ˆÑÔğ<ğ <ñ Ôğ<ğ ‡‚Ğ
-ÑÔğX˜_ğ Xğ Xğ Xñ ÔğXğ$ ‡‚Ğ	ÑÔğ2ğ 2ñ Ôğ2ğ 2ğ 2r   
-==> ./backend/requirements.txt <==
-fastapi==0.110.0
-uvicorn==0.28.0
-psycopg2-binary==2.9.9
-redis==5.0.3
-pydantic==2.6.4
