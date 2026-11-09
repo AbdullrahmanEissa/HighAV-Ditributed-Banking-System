@@ -12,29 +12,15 @@ services:
     environment:
       PATRONI_SCOPE: banking-cluster
       PATRONI_NAME: patroni-standby
-      PATRONI_ETCD3_HOSTS: 172.31.38.111:2379
-      PATRONI_RESTAPI_CONNECT_ADDRESS: 172.31.38.189:8008
-      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
-      PATRONI_POSTGRESQL_CONNECT_ADDRESS: 172.31.38.189:5432
-      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
-      PATRONI_POSTGRESQL_DATA_DIR: /var/lib/postgresql/data/pgdata
-      PATRONI_POSTGRESQL_USE_PG_REWIND: "true"
-      PATRONI_SUPERUSER_USERNAME: postgres
-      PATRONI_SUPERUSER_PASSWORD: dbprimarybanking
-      PATRONI_REPLICATION_USERNAME: replicator
-      PATRONI_REPLICATION_PASSWORD: dbprimarybanking
-      PATRONI_ADMIN_USERNAME: admin
-      PATRONI_ADMIN_PASSWORD: dbprimarybanking
-      PATRONI_POSTGRESQL_PG_HBA: |
-        - local all all trust
-        - host replication replicator 172.31.0.0/16 md5
-        - host all all 0.0.0.0/0 md5
-    command: patroni
+      PATRONI_IP: 172.31.38.189
+      ETCD_HOSTS: 172.31.38.111:2379
+      DB_PASS: dbprimarybanking
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 20s
 
   redis:
     image: redis:7-alpine
