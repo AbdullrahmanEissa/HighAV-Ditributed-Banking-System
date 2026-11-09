@@ -17,8 +17,7 @@ restapi:
   connect_address: ${PATRONI_IP}:8008
 
 etcd3:
-  hosts:
-    - ${ETCD_HOSTS:-172.31.38.111:2379}
+  hosts: "${ETCD_HOSTS:-172.31.38.111:2379}"
 
 bootstrap:
   dcs:

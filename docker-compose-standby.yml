@@ -7,7 +7,7 @@ services:
       - "2379:2379"
       - "2380:2380"
     volumes:
-      - etcd_standby_data:/etcd-data
+      - etcd_standby_v2:/etcd-data
     environment:
       ETCD_NAME: "etcd-standby"
       ETCD_DATA_DIR: "/etcd-data"
@@ -30,7 +30,7 @@ services:
       - "5432:5432"
       - "8008:8008"
     volumes:
-      - pg_standby_patroni_data:/var/lib/postgresql/data
+      - pg_standby_patroni_v2:/var/lib/postgresql/data
     environment:
       PATRONI_SCOPE: banking-cluster
       PATRONI_NAME: patroni-standby
@@ -42,7 +42,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 40s
 
   redis:
     image: redis:7-alpine
@@ -78,5 +78,5 @@ services:
       - backend
 
 volumes:
-  etcd_standby_data:
-  pg_standby_patroni_data:
+  etcd_standby_v2:
+  pg_standby_patroni_v2:

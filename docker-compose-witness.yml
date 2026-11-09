@@ -7,7 +7,7 @@ services:
       - "2379:2379"
       - "2380:2380"
     volumes:
-      - etcd_witness_data:/etcd-data
+      - etcd_witness_v2:/etcd-data
     environment:
       ETCD_NAME: "etcd-witness"
       ETCD_DATA_DIR: "/etcd-data"
@@ -20,4 +20,4 @@ services:
       ETCD_INITIAL_CLUSTER_TOKEN: "banking-ha-cluster"
 
 volumes:
-  etcd_witness_data:
+  etcd_witness_v2:
