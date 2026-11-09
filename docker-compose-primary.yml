@@ -7,15 +7,15 @@ services:
       - "2379:2379"
       - "2380:2380"
     environment:
-      ETCD_NAME: etcd-primary
-      ETCD_DATA_DIR: /etcd-data
-      ETCD_LISTEN_CLIENT_URLS: http://0.0.0
-      ETCD_ADVERTISE_CLIENT_URLS: http://172.31.38.111:2379
-      ETCD_LISTEN_PEER_URLS: http://0.0.0
-      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.31.38.111:2380
-      ETCD_INITIAL_CLUSTER: etcd-primary=http://172.31.38.111:2380
-      ETCD_INITIAL_CLUSTER_STATE: new
-      ETCD_INITIAL_CLUSTER_TOKEN: banking-ha-cluster
+      ETCD_NAME: "etcd-primary"
+      ETCD_DATA_DIR: "/etcd-data"
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0"
+      ETCD_ADVERTISE_CLIENT_URLS: "http://172.31.38.111:2379"
+      ETCD_LISTEN_PEER_URLS: "http://0.0.0"
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: "http://172.31.38.111:2380"
+      ETCD_INITIAL_CLUSTER: "etcd-primary=http://172.31.38.111:2380"
+      ETCD_INITIAL_CLUSTER_STATE: "new"
+      ETCD_INITIAL_CLUSTER_TOKEN: "banking-ha-cluster"
 
   db:
     image: abdueissa/banking-postgres-patroni:latest
