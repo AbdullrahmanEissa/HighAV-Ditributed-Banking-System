@@ -1,19 +1,72 @@
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: primary_db
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.15
+    container_name: primary_etcd
     restart: always
+    ports:
+      - "2379:2379"
+      - "2380:2380"
     environment:
-      POSTGRES_DB: banking
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: dbprimarybanking
+      ETCD_NAME: etcd-primary
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0
+      ETCD_ADVERTISE_CLIENT_URLS: http://172.31.38.111:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://172.31.38.111:2380
+      ETCD_INITIAL_CLUSTER: etcd-primary=http://172.31.38.111:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: banking-ha-cluster
+
+  db:
+    image: abdueissa/banking-postgres-patroni:latest
+    container_name: primary_db
+    hostname: patroni-primary
+    restart: always
+    depends_on:
+      - etcd
     ports:
       - "5432:5432"
+      - "8008:8008"
     volumes:
-      - pg_primary_data:/var/lib/postgresql/data
+      - pg_primary_patroni_data:/var/lib/postgresql/data
+    environment:
+      PATRONI_SCOPE: banking-cluster
+      PATRONI_NAME: patroni-primary
+      PATRONI_ETCD3_HOSTS: 172.31.38.111:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: 172.31.38.111:8008
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: 172.31.38.111:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_POSTGRESQL_DATA_DIR: /var/lib/postgresql/data/pgdata
+      PATRONI_POSTGRESQL_USE_PG_REWIND: "true"
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: dbprimarybanking
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: dbprimarybanking
+      PATRONI_ADMIN_USERNAME: admin
+      PATRONI_ADMIN_PASSWORD: dbprimarybanking
+      PATRONI_POSTGRESQL_PG_HBA: |
+        - local all all trust
+        - host replication replicator 172.31.0.0/16 md5
+        - host all all 0.0.0.0/0 md5
+      PATRONI_BOOTSTRAP_DCS: |
+        ttl: 30
+        loop_wait: 10
+        retry_timeout: 10
+        maximum_lag_on_failover: 1048576
+        postgresql:
+          use_pg_rewind: true
+          parameters:
+            wal_level: replica
+            max_wal_senders: 10
+            wal_keep_size: 1024MB
+      PATRONI_BOOTSTRAP_INITDB: |
+        - encoding: UTF8
+        - data-checksums
+      PATRONI_BOOTSTRAP_POST_INIT: "psql -U postgres -c 'CREATE DATABASE banking;'"
+    command: patroni
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d banking"]
-      interval: 5s
+      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
+      interval: 10s
       timeout: 5s
       retries: 5
 
@@ -51,4 +104,4 @@ services:
       - backend
 
 volumes:
-  pg_primary_data:
+  pg_primary_patroni_data:

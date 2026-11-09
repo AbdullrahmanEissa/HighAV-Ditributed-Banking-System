@@ -1,17 +1,38 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: abdueissa/banking-postgres-patroni:latest
     container_name: standby_db
+    hostname: patroni-standby
     restart: always
-    environment:
-      POSTGRES_DB: banking
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: dbstandbybanking
+    ports:
+      - "5432:5432"
+      - "8008:8008"
     volumes:
-      - pg_standby_data:/var/lib/postgresql/data
+      - pg_standby_patroni_data:/var/lib/postgresql/data
+    environment:
+      PATRONI_SCOPE: banking-cluster
+      PATRONI_NAME: patroni-standby
+      PATRONI_ETCD3_HOSTS: 172.31.38.111:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: 172.31.38.189:8008
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: 172.31.38.189:5432
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_POSTGRESQL_DATA_DIR: /var/lib/postgresql/data/pgdata
+      PATRONI_POSTGRESQL_USE_PG_REWIND: "true"
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: dbprimarybanking
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: dbprimarybanking
+      PATRONI_ADMIN_USERNAME: admin
+      PATRONI_ADMIN_PASSWORD: dbprimarybanking
+      PATRONI_POSTGRESQL_PG_HBA: |
+        - local all all trust
+        - host replication replicator 172.31.0.0/16 md5
+        - host all all 0.0.0.0/0 md5
+    command: patroni
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d banking"]
-      interval: 5s
+      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
+      interval: 10s
       timeout: 5s
       retries: 5
 
@@ -28,7 +49,7 @@ services:
       DB_HOST: db
       DB_NAME: banking
       DB_USER: postgres
-      DB_PASS: dbstandbybanking
+      DB_PASS: dbprimarybanking
       REDIS_HOST: redis
       NODE_ROLE: STANDBY-EC2-2
     depends_on:
@@ -49,4 +70,4 @@ services:
       - backend
 
 volumes:
-  pg_standby_data:
+  pg_standby_patroni_data:
