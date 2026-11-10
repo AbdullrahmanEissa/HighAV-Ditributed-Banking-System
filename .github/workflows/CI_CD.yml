@@ -38,10 +38,11 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/banking-postgres-patroni:latest
 
-  deploy:
+  deploy-etcd:
     needs: build-and-push
     runs-on: ${{ matrix.node_label }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - node_label: primary
@@ -52,13 +53,28 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Run Docker Compose
+      - name: Start etcd member
+        run: docker compose -f ${{ matrix.compose_file }} up -d etcd
+
+  deploy-app:
+    needs: deploy-etcd
+    runs-on: ${{ matrix.node_label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node_label: primary
+            compose_file: docker-compose-primary.yml
+          - node_label: standby
+            compose_file: docker-compose-standby.yml
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy application stack
         run: |
           docker compose -f ${{ matrix.compose_file }} pull
           if ! docker compose -f ${{ matrix.compose_file }} up -d --remove-orphans; then
-            echo "=== DB LOGS ==="
-            docker logs primary_db || docker logs standby_db || true
-            echo "=== ETCD LOGS ==="
-            docker logs primary_etcd || true
+            docker compose -f ${{ matrix.compose_file }} logs --tail 60 etcd db
             exit 1
           fi
