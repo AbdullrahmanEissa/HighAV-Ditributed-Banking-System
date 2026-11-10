@@ -1,0 +1,68 @@
+digraph HA {
+  newrank=true;
+  rankdir=TB;
+  nodesep=0.55;
+  ranksep=0.75;
+  splines=spline;
+  bgcolor="white";
+  fontname="Helvetica";
+  node [shape=box, style="rounded,filled", fillcolor="#EEF2FF", color="#4F46E5", fontname="Helvetica", fontsize=12, margin="0.18,0.10"];
+  edge [fontname="Helvetica", fontsize=10, color="#374151"];
+
+  users [label="Users / Clients", shape=oval, fillcolor="#FEF3C7", color="#D97706"];
+  lb [label="AWS Load Balancer\nhealth check: GET /health\n200 = leader node   |   503 = replica node", fillcolor="#FEF3C7", color="#D97706"];
+  users -> lb;
+
+  subgraph cluster_a {
+    label="EC2-1  PRIMARY  |  172.31.38.111";
+    labeljust=l; fontsize=13; fontname="Helvetica-Bold";
+    style="rounded,filled"; fillcolor="#F0FDF4"; color="#16A34A";
+    feA [label="Frontend\nNginx :80"];
+    beA [label="Backend\nFastAPI"];
+    rdA [label="Redis\ncache", shape=cylinder, fillcolor="#FEE2E2", color="#DC2626"];
+    pgA [label="PostgreSQL 16 + Patroni\nLEADER (read/write)", shape=cylinder, fillcolor="#DBEAFE", color="#2563EB"];
+    etA [label="etcd member 1", fillcolor="#F3E8FF", color="#9333EA"];
+  }
+
+  subgraph cluster_b {
+    label="EC2-2  STANDBY  |  172.31.38.189";
+    labeljust=l; fontsize=13; fontname="Helvetica-Bold";
+    style="rounded,filled"; fillcolor="#F0FDF4"; color="#16A34A";
+    feB [label="Frontend\nNginx :80"];
+    beB [label="Backend\nFastAPI"];
+    rdB [label="Redis\ncache", shape=cylinder, fillcolor="#FEE2E2", color="#DC2626"];
+    pgB [label="PostgreSQL 16 + Patroni\nREPLICA (read-only)", shape=cylinder, fillcolor="#DBEAFE", color="#2563EB"];
+    etB [label="etcd member 2", fillcolor="#F3E8FF", color="#9333EA"];
+  }
+
+  subgraph cluster_c {
+    label="EC2-3  WITNESS  |  172.31.43.188";
+    labeljust=l; fontsize=13; fontname="Helvetica-Bold";
+    style="rounded,filled"; fillcolor="#FAF5FF"; color="#9333EA";
+    etC [label="etcd member 3\nquorum tie-breaker", fillcolor="#F3E8FF", color="#9333EA"];
+  }
+
+  {rank=same; feA; feB;}
+  {rank=same; beA; beB;}
+  {rank=same; rdA; pgA; rdB; pgB;}
+  {rank=same; etA; etB; etC;}
+
+  lb -> feA [penwidth=2.4, color="#16A34A", label="  traffic (200)  ", fontcolor="#16A34A"];
+  lb -> feB [style=dashed, color="#DC2626", label="  503 until promoted  ", fontcolor="#DC2626"];
+
+  feA -> beA;
+  feB -> beB;
+  beA -> rdA;
+  beA -> pgA;
+  beB -> rdB;
+  beB -> pgB;
+
+  pgA -> etA [dir=both, label=" leader lock "];
+  pgB -> etB [dir=both, label=" leader lock "];
+
+  pgA -> pgB [penwidth=2.4, color="#2563EB", fontcolor="#2563EB", label=" WAL streaming\nreplication ", constraint=false];
+
+  etA -> etB [dir=both, color="#9333EA", fontcolor="#9333EA", label=" Raft ", constraint=false];
+  etB -> etC [dir=both, color="#9333EA", fontcolor="#9333EA", label=" Raft ", constraint=false];
+
+}
