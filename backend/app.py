@@ -54,14 +54,14 @@ def health_check():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT pg_is_in_recovery();")
-        replica = cur.fetchone()[0]
+        is_standby = cur.fetchone()[0]
+        cur.close()
         conn.close()
-        r.ping()
+        if is_standby:
+            return JSONResponse(status_code=503, content={"status": "standby_readonly", "node": NODE_ROLE})
+        return {"status": "healthy_primary", "node": NODE_ROLE}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    if replica:
-        raise HTTPException(status_code=503, detail="replica")
-    return {"status": "healthy", "node": os.getenv("NODE_ROLE", "unknown")}
+        return JSONResponse(status_code=500, content={"status": "unhealthy", "error": str(e)})
 
 @app.post("/api/transfers")
 def create_transfer(payload: TransferRequest):
