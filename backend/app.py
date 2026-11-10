@@ -2,6 +2,7 @@ import os
 import psycopg2
 import redis
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 app = FastAPI()
@@ -11,6 +12,7 @@ DB_NAME = os.getenv("DB_NAME", "banking")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASS = os.getenv("DB_PASS", "secure_password")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+NODE_ROLE = os.getenv("NODE_ROLE", "unknown")
 
 r = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 
@@ -22,7 +24,6 @@ def get_db_connection():
         password=DB_PASS
     )
 
-# تهيئة جدول العمليات عند الإقلاع
 @app.on_event("startup")
 def init_db():
     try:
@@ -76,7 +77,6 @@ def create_transfer(payload: TransferRequest):
         conn.commit()
         cur.close()
         conn.close()
-        # كسر أو تحديث الكاش
         r.delete("latest_transfers")
         return {"success": True, "transfer_id": transfer_id}
     except Exception as e:
@@ -94,7 +94,7 @@ def get_transfers():
     rows = cur.fetchall()
     cur.close()
     conn.close()
-    
+
     result = [{"id": row[0], "sender": row[1], "receiver": row[2], "amount": float(row[3]), "date": str(row[4])} for row in rows]
     r.setex("latest_transfers", 60, str(result))
     return {"data": result, "source": "database"}
