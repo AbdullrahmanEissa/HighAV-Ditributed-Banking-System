@@ -2,7 +2,7 @@
 
 > A two-site, self-healing application stack on AWS: **PostgreSQL + Patroni**, a **3-member etcd quorum**, **leader-aware load balancing**, and a **GitHub Actions CI/CD pipeline**, with automatic failover and automatic re-join of the failed node, all without manual intervention.
 
-![Architecture](docs/architecture.png)
+<img width="2203" height="1587" alt="image" src="https://github.com/user-attachments/assets/6a0aee49-2659-4286-96f8-fec298ffd1a4" />
 
 ---
 
